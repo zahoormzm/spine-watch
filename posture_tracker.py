@@ -21,12 +21,15 @@ import numpy as np
 DEFAULT_THRESHOLD = 140
 FRAME_WIDTH       = 640
 FRAME_HEIGHT      = 480
+FPS_WINDOW        = 30
 SLOUCH_HOLD       = 8
 ANGLE_SMOOTH      = 5
 
 EMERALD  = (80,  200, 100)
 CORAL    = (50,   60, 220)
+AMBER    = (30,  180, 255)
 WHITE    = (255, 255, 255)
+PANEL_BG = (20,   20,  20)
 
 _P = mp.solutions.pose.PoseLandmark
 LM = {
@@ -75,6 +78,63 @@ def best_posture_angle(landmarks, w: int, h: int) -> tuple:
     return best[:3]
 
 
+def _rounded_fill(img, p1: tuple, p2: tuple, color: tuple, r: int = 10):
+    x1, y1 = p1
+    x2, y2 = p2
+    r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
+    cv2.rectangle(img, (x1 + r, y1), (x2 - r, y2), color, -1)
+    cv2.rectangle(img, (x1, y1 + r), (x2, y2 - r), color, -1)
+    for cx, cy in [(x1+r, y1+r), (x2-r, y1+r), (x1+r, y2-r), (x2-r, y2-r)]:
+        cv2.circle(img, (cx, cy), r, color, -1)
+
+
+def draw_hud(frame, angle, threshold: float, is_slouching: bool,
+             session_secs: float, detected: bool):
+    h, w = frame.shape[:2]
+    F = cv2.FONT_HERSHEY_SIMPLEX
+
+    if detected:
+        accent = CORAL if is_slouching else EMERALD
+        text   = ("SLOUCHING" if is_slouching else "POSTURE OK") + (
+            f"   {angle:.0f}\u00b0" if angle is not None else ""
+        )
+    else:
+        accent = AMBER
+        text   = "NO PERSON DETECTED"
+
+    (tw, th), _ = cv2.getTextSize(text, F, 0.65, 2)
+    px, py = 18, 9
+    bx1 = (w - tw) // 2 - px;  by1 = 10
+    bx2 = (w + tw) // 2 + px;  by2 = by1 + th + 2 * py
+
+    ov = frame.copy()
+    _rounded_fill(ov, (bx1, by1), (bx2, by2), PANEL_BG, r=12)
+    cv2.addWeighted(ov, 0.82, frame, 0.18, 0, frame)
+    cv2.rectangle(frame, (bx1 + 2, by1 + 5), (bx1 + 5, by2 - 5), accent, -1)
+    cv2.putText(frame, text, ((w - tw) // 2, by1 + py + th),
+                F, 0.65, accent, 2, cv2.LINE_AA)
+
+    strip_h = 26
+    ov2 = frame.copy()
+    cv2.rectangle(ov2, (0, h - strip_h), (w, h), PANEL_BG, -1)
+    cv2.addWeighted(ov2, 0.72, frame, 0.28, 0, frame)
+
+    m, s  = divmod(int(session_secs), 60)
+    hr, m = divmod(m, 60)
+    info  = f"{hr:02d}:{m:02d}:{s:02d}   \u00b7   Threshold: {threshold:.0f}\u00b0   ( +/- )"
+    (iw, _), _ = cv2.getTextSize(info, F, 0.42, 1)
+    cv2.putText(frame, info, ((w - iw) // 2, h - 8), F, 0.42, AMBER, 1, cv2.LINE_AA)
+
+
+def draw_angle_arc(frame, pts: dict, color: tuple, r: int = 40):
+    if not pts:
+        return
+    sho, ear, hip = pts["shoulder"], pts["ear"], pts["hip"]
+    a1 = math.degrees(math.atan2(ear[1] - sho[1], ear[0] - sho[0]))
+    a2 = math.degrees(math.atan2(hip[1] - sho[1], hip[0] - sho[0]))
+    cv2.ellipse(frame, sho, (r, r), 0, min(a1, a2), max(a1, a2), color, 2, cv2.LINE_AA)
+
+
 def draw_key_points(frame, pts: dict, color: tuple):
     if not pts:
         return
@@ -115,8 +175,10 @@ def main():
 
     threshold  = args.threshold
     mirror     = not args.no_flip
+    fps_times  = deque(maxlen=FPS_WINDOW)
     angle_buf  = deque(maxlen=ANGLE_SMOOTH)
     slouch_ctr = 0
+    session_start = time.time()
 
     mp_pose = mp.solutions.pose
     mp_draw = mp.solutions.drawing_utils
@@ -139,6 +201,7 @@ def main():
             print(f"[PostureGuard] Running — threshold {threshold:.0f}° | q/ESC to quit")
 
             while True:
+                t0    = time.perf_counter()
                 frame = cam.capture_array()
                 if mirror:
                     frame = cv2.flip(frame, 1)
@@ -151,9 +214,11 @@ def main():
 
                 angle = side = pts = None
                 is_slouch = False
+                detected  = False
 
                 if results.pose_landmarks:
-                    lms = results.pose_landmarks.landmark
+                    detected = True
+                    lms      = results.pose_landmarks.landmark
                     angle, side, pts = best_posture_angle(lms, w, h)
 
                     if angle is not None:
@@ -172,6 +237,12 @@ def main():
                         landmark_drawing_spec=spec, connection_drawing_spec=spec,
                     )
                     draw_key_points(frame, pts, sk)
+                    draw_angle_arc(frame, pts, sk)
+
+                fps_times.append(time.perf_counter() - t0)
+
+                draw_hud(frame, angle, threshold, is_slouch,
+                         time.time() - session_start, detected)
 
                 cv2.imshow(WIN, frame)
                 key = cv2.waitKey(1) & 0xFF
@@ -179,8 +250,10 @@ def main():
                     break
                 elif key in (ord("+"), ord("=")):
                     threshold = min(threshold + 5, 180)
+                    print(f"[PostureGuard] Threshold → {threshold:.0f}°")
                 elif key in (ord("-"), ord("_")):
                     threshold = max(threshold - 5, 90)
+                    print(f"[PostureGuard] Threshold → {threshold:.0f}°")
 
     except KeyboardInterrupt:
         print("\n[PostureGuard] Interrupted.")
