@@ -9,8 +9,13 @@ Privacy: ALL processing happens in RAM. Zero frames touch disk. Ever.
 """
 
 import argparse
+import io
 import math
+import subprocess
+import sys
+import threading
 import time
+import wave
 from collections import deque
 from contextlib import contextmanager
 
@@ -24,6 +29,7 @@ FRAME_HEIGHT      = 480
 FPS_WINDOW        = 30
 SLOUCH_HOLD       = 8
 ANGLE_SMOOTH      = 5
+ALERT_COOLDOWN    = 5.0
 
 EMERALD  = (80,  200, 100)
 CORAL    = (50,   60, 220)
@@ -36,6 +42,27 @@ LM = {
     "left":  (_P.LEFT_EAR,  _P.LEFT_SHOULDER,  _P.LEFT_HIP),
     "right": (_P.RIGHT_EAR, _P.RIGHT_SHOULDER, _P.RIGHT_HIP),
 }
+
+
+def _beep(freq: int = 880, dur: float = 0.18, vol: float = 0.6):
+    sr   = 44100
+    tone = (np.sin(2 * np.pi * freq * np.linspace(0, dur, int(sr * dur), endpoint=False))
+            * vol * 32767).astype(np.int16)
+    buf  = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2)
+        wf.setframerate(sr); wf.writeframes(tone.tobytes())
+    try:
+        subprocess.Popen(
+            ["aplay", "-q", "-"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).communicate(buf.getvalue())
+    except FileNotFoundError:
+        pass
+
+
+def play_alert():
+    threading.Thread(target=_beep, daemon=True).start()
 
 
 def calc_angle(a: tuple, b: tuple, c: tuple) -> float:
@@ -143,6 +170,30 @@ def draw_key_points(frame, pts: dict, color: tuple):
         cv2.circle(frame, (x, y), 7, WHITE,  1, cv2.LINE_AA)
 
 
+def print_summary(start: float, good: int, bad: int, events: int,
+                  asum: float, acount: int):
+    dur     = time.time() - start
+    m, s    = divmod(int(dur), 60)
+    hr, m   = divmod(m, 60)
+    total   = good + bad
+    pct     = good / total * 100 if total else 0.0
+    avg_ang = asum  / acount     if acount else 0.0
+    W = 40
+
+    def row(label, value):
+        line = f"  {label:<22}{value}"
+        print(f"\u2551{line:<{W}}\u2551")
+
+    print(f"\n\u2554{'═'*W}\u2557")
+    print(f"\u2551{'  PostureGuard \u2014 Session Summary':<{W}}\u2551")
+    print(f"\u2560{'═'*W}\u2563")
+    row("Duration:",        f"{hr:02d}:{m:02d}:{s:02d}")
+    row("Good posture:",    f"{pct:.1f}%")
+    row("Slouch episodes:", str(events))
+    row("Average angle:",   f"{avg_ang:.1f}\u00b0")
+    print(f"\u255a{'═'*W}\u255d\n")
+
+
 @contextmanager
 def open_picamera(width: int, height: int):
     from picamera2 import Picamera2
@@ -173,12 +224,19 @@ def main():
     ap.add_argument("--no-flip",  action="store_true")
     args = ap.parse_args()
 
-    threshold  = args.threshold
-    mirror     = not args.no_flip
-    fps_times  = deque(maxlen=FPS_WINDOW)
-    angle_buf  = deque(maxlen=ANGLE_SMOOTH)
-    slouch_ctr = 0
-    session_start = time.time()
+    threshold      = args.threshold
+    mirror         = not args.no_flip
+    fps_times      = deque(maxlen=FPS_WINDOW)
+    angle_buf      = deque(maxlen=ANGLE_SMOOTH)
+    slouch_ctr     = 0
+    session_start  = time.time()
+    good_frames    = 0
+    bad_frames     = 0
+    slouch_events  = 0
+    last_slouching = False
+    angle_sum      = 0.0
+    angle_count    = 0
+    last_alert_t   = 0.0
 
     mp_pose = mp.solutions.pose
     mp_draw = mp.solutions.drawing_utils
@@ -230,6 +288,22 @@ def main():
                             slouch_ctr = max(slouch_ctr - 2, 0)
                         is_slouch = slouch_ctr >= SLOUCH_HOLD
 
+                        if is_slouch:
+                            bad_frames += 1
+                        else:
+                            good_frames += 1
+                        angle_sum   += angle
+                        angle_count += 1
+
+                        if is_slouch and not last_slouching:
+                            slouch_events += 1
+                        last_slouching = is_slouch
+
+                        now = time.time()
+                        if is_slouch and (now - last_alert_t) >= ALERT_COOLDOWN:
+                            play_alert()
+                            last_alert_t = now
+
                     sk   = CORAL if is_slouch else EMERALD
                     spec = mp_draw.DrawingSpec(color=sk, thickness=2, circle_radius=2)
                     mp_draw.draw_landmarks(
@@ -259,10 +333,12 @@ def main():
         print("\n[PostureGuard] Interrupted.")
     except ImportError as e:
         print(f"\n[Error] Missing dependency: {e}")
-        import sys; sys.exit(1)
+        sys.exit(1)
     finally:
         pose.close()
         cv2.destroyAllWindows()
+        print_summary(session_start, good_frames, bad_frames,
+                      slouch_events, angle_sum, angle_count)
 
 
 if __name__ == "__main__":
