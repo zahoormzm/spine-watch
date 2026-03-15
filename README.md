@@ -1,4 +1,4 @@
-# PostureGuard
+# Spine Watch
 
 Real-time posture monitoring for the Raspberry Pi 5 using a Pi Camera V2 and MediaPipe Pose. The system measures the ear-shoulder-hip angle on each frame and alerts you when sustained slouching is detected. All processing runs in RAM — no frames are written to disk.
 
