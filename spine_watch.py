@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PostureGuard — Real-Time Privacy-First Posture Tracking
+SpineWatch — Real-Time Privacy-First Posture Tracking
 Target: Raspberry Pi 5 · Pi Camera V2
 
 Controls:  q / ESC = quit     +/- = adjust threshold
