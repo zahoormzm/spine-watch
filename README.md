@@ -1,6 +1,6 @@
 # Spine Watch
 
-Real-time posture monitoring for the Raspberry Pi 5 using a Pi Camera V2 and MediaPipe Pose. The system measures the ear-shoulder-hip angle on each frame and alerts you when sustained slouching is detected. All processing runs in RAM — no frames are written to disk.
+Stop slouching at your desk. Spine Watch turns your Raspberry Pi 5 into a strict (but entirely private) posture coach. Using a Pi Camera and MediaPipe Pose, it watches your ear-shoulder-hip angle in real time and beeps at you if you start to shrimp. Everything runs in RAM, so your bad posture is never saved to disk.
 
 ---
 
