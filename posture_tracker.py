@@ -29,7 +29,16 @@ FRAME_HEIGHT      = 480
 FPS_WINDOW        = 30
 SLOUCH_HOLD       = 8
 ANGLE_SMOOTH      = 5
-ALERT_COOLDOWN    = 5.0
+BUZZER_PIN        = 18  # BCM GPIO pin
+
+# (min_continuous_seconds, cooldown_seconds, n_beeps, freq_hz)
+ALERT_LEVELS = [
+    (  0, 5.0, 1,  700),
+    ( 15, 3.5, 1,  880),
+    ( 30, 2.5, 2, 1000),
+    ( 60, 1.5, 3, 1100),
+    (120, 0.8, 4, 1300),
+]
 
 EMERALD  = (80,  200, 100)
 CORAL    = (50,   60, 220)
@@ -44,25 +53,74 @@ LM = {
 }
 
 
-def _beep(freq: int = 880, dur: float = 0.18, vol: float = 0.6):
-    sr   = 44100
-    tone = (np.sin(2 * np.pi * freq * np.linspace(0, dur, int(sr * dur), endpoint=False))
-            * vol * 32767).astype(np.int16)
-    buf  = io.BytesIO()
+def get_alert_params(continuous_secs: float) -> tuple:
+    cooldown, n_beeps, freq = ALERT_LEVELS[0][1:]
+    for min_secs, cd, n, f in ALERT_LEVELS:
+        if continuous_secs >= min_secs:
+            cooldown, n_beeps, freq = cd, n, f
+    return cooldown, n_beeps, freq
+
+
+def _beep(n: int = 1, freq: int = 880, dur: float = 0.18, gap: float = 0.08, vol: float = 0.6):
+    sr      = 44100
+    tone    = (np.sin(2 * np.pi * freq * np.linspace(0, dur, int(sr * dur), endpoint=False))
+               * vol * 32767).astype(np.int16)
+    silence = np.zeros(int(sr * gap), dtype=np.int16)
+
+    parts = []
+    for i in range(n):
+        parts.append(tone)
+        if i < n - 1:
+            parts.append(silence)
+
+    buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1); wf.setsampwidth(2)
-        wf.setframerate(sr); wf.writeframes(tone.tobytes())
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(np.concatenate(parts).tobytes())
+
     try:
         subprocess.Popen(
             ["aplay", "-q", "-"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         ).communicate(buf.getvalue())
     except FileNotFoundError:
         pass
 
 
-def play_alert():
-    threading.Thread(target=_beep, daemon=True).start()
+def play_alert(n: int = 1, freq: int = 880):
+    threading.Thread(target=_beep, args=(n, freq), daemon=True).start()
+
+
+def _buzz_worker(buzzer, n: int):
+    try:
+        buzzer.beep(on_time=0.1, off_time=0.1, n=n, background=False)
+    except Exception:
+        pass
+
+
+def init_buzzer(pin: int):
+    """
+    Wiring:
+        Buzzer (+) --> GPIO 18 (BCM)
+        Buzzer (-) --> GND
+    """
+    try:
+        from gpiozero import Buzzer as GZBuzzer
+        bz = GZBuzzer(pin)
+        print(f"[Buzzer] Initialised on GPIO {pin} (BCM)")
+        return bz
+    except Exception as e:
+        print(f"[Buzzer] Could not initialise on GPIO {pin}: {e}")
+        return None
+
+
+def buzz_alert(buzzer, n: int = 1):
+    if buzzer is not None:
+        threading.Thread(target=_buzz_worker, args=(buzzer, n), daemon=True).start()
 
 
 def calc_angle(a: tuple, b: tuple, c: tuple) -> float:
@@ -217,15 +275,24 @@ def open_picamera(width: int, height: int):
 
 def main():
     ap = argparse.ArgumentParser(description="PostureGuard — Pi 5 Posture Tracker")
-    ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
-    ap.add_argument("--width",    type=int,   default=FRAME_WIDTH)
-    ap.add_argument("--height",   type=int,   default=FRAME_HEIGHT)
-    ap.add_argument("--model",    type=int,   default=1, choices=[0, 1, 2])
-    ap.add_argument("--no-flip",  action="store_true")
+    ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
+                    help=f"Slouch angle threshold in degrees (default {DEFAULT_THRESHOLD})")
+    ap.add_argument("--width",      type=int,  default=FRAME_WIDTH)
+    ap.add_argument("--height",     type=int,  default=FRAME_HEIGHT)
+    ap.add_argument("--model",      type=int,  default=1, choices=[0, 1, 2],
+                    help="MediaPipe complexity: 0=lite 1=full 2=heavy")
+    ap.add_argument("--no-flip",    action="store_true",
+                    help="Disable horizontal mirror mode")
+    ap.add_argument("--buzzer",     action="store_true",
+                    help="Enable GPIO buzzer alert")
+    ap.add_argument("--buzzer-pin", type=int, default=BUZZER_PIN,
+                    help=f"BCM GPIO pin for the buzzer (default {BUZZER_PIN})")
     args = ap.parse_args()
 
-    threshold      = args.threshold
-    mirror         = not args.no_flip
+    threshold = args.threshold
+    mirror    = not args.no_flip
+    buzzer    = init_buzzer(args.buzzer_pin) if args.buzzer else None
+
     fps_times      = deque(maxlen=FPS_WINDOW)
     angle_buf      = deque(maxlen=ANGLE_SMOOTH)
     slouch_ctr     = 0
@@ -237,6 +304,7 @@ def main():
     angle_sum      = 0.0
     angle_count    = 0
     last_alert_t   = 0.0
+    slouch_start_t = None
 
     mp_pose = mp.solutions.pose
     mp_draw = mp.solutions.drawing_utils
@@ -256,7 +324,7 @@ def main():
         with open_picamera(args.width, args.height) as cam:
             cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(WIN, args.width, args.height)
-            print(f"[PostureGuard] Running — threshold {threshold:.0f}° | q/ESC to quit")
+            print(f"[PostureGuard] Running  — threshold {threshold:.0f}°  |  q/ESC quit   +/- threshold")
 
             while True:
                 t0    = time.perf_counter()
@@ -282,6 +350,7 @@ def main():
                     if angle is not None:
                         angle_buf.append(angle)
                         angle = sum(angle_buf) / len(angle_buf)
+
                         if angle < threshold:
                             slouch_ctr = min(slouch_ctr + 1, SLOUCH_HOLD + 1)
                         else:
@@ -297,12 +366,18 @@ def main():
 
                         if is_slouch and not last_slouching:
                             slouch_events += 1
+                            slouch_start_t = time.time()
+                        elif not is_slouch:
+                            slouch_start_t = None
                         last_slouching = is_slouch
 
                         now = time.time()
-                        if is_slouch and (now - last_alert_t) >= ALERT_COOLDOWN:
-                            play_alert()
-                            last_alert_t = now
+                        if is_slouch and slouch_start_t is not None:
+                            cooldown, n_beeps, freq = get_alert_params(now - slouch_start_t)
+                            if (now - last_alert_t) >= cooldown:
+                                play_alert(n_beeps, freq)
+                                buzz_alert(buzzer, n_beeps)
+                                last_alert_t = now
 
                     sk   = CORAL if is_slouch else EMERALD
                     spec = mp_draw.DrawingSpec(color=sk, thickness=2, circle_radius=2)
@@ -319,6 +394,7 @@ def main():
                          time.time() - session_start, detected)
 
                 cv2.imshow(WIN, frame)
+
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     break
@@ -337,6 +413,9 @@ def main():
     finally:
         pose.close()
         cv2.destroyAllWindows()
+        if buzzer is not None:
+            buzzer.close()
+            print("[Buzzer] Released.")
         print_summary(session_start, good_frames, bad_frames,
                       slouch_events, angle_sum, angle_count)
 
