@@ -4,6 +4,12 @@ Stop slouching at your desk. Spine Watch turns your Raspberry Pi 5 into a strict
 
 ---
 
+## Demo
+
+A screen recording of Spine Watch running live can be viewed on [YouTube](https://youtu.be/LNT1qJHfEqE).
+
+---
+
 ## Hardware Requirements
 
 - Raspberry Pi 5
@@ -83,7 +89,7 @@ Alerts escalate the longer you stay slouched without correcting. The sequence re
 
 On exit, a summary is printed to the terminal:
 
-```
+```text
 ╔════════════════════════════════════════╗
 ║  PostureGuard — Session Summary        ║
 ╠════════════════════════════════════════╣
@@ -93,12 +99,6 @@ On exit, a summary is printed to the terminal:
 ║  Average angle:         141.5°         ║
 ╚════════════════════════════════════════╝
 ```
-
----
-
-## Demo
-
-A screen recording of Spine Watch running live is available in the repository.
 
 ---
 
