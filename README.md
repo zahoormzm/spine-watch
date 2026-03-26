@@ -7,7 +7,7 @@ Stop slouching at your desk. Spine Watch turns your Raspberry Pi 5 into a strict
 ## Hardware Requirements
 
 - Raspberry Pi 5
-- Pi Camera V2 (CSI interface)
+- Pi Camera V3 Wide (CSI interface)
 - HDMI display
 - Optional: passive or active buzzer wired to GPIO 18 (BCM) and GND
 
@@ -67,15 +67,15 @@ Or run directly without activating:
 
 ## Alert Escalation
 
-Alerts (speaker beep + GPIO buzzer) escalate the longer you sustain bad posture without correcting it. The pattern resets as soon as posture improves.
+Alerts escalate the longer you stay slouched without correcting. The sequence resets as soon as posture improves.
 
-| Continuous slouch | Cooldown | Beeps | Pitch |
-|-------------------|----------|-------|-------|
-| 0 – 15 s | 5.0 s | 1 | 700 Hz |
-| 15 – 30 s | 3.5 s | 1 | 880 Hz |
-| 30 – 60 s | 2.5 s | 2 | 1000 Hz |
-| 60 – 120 s | 1.5 s | 3 | 1100 Hz |
-| 120 s+ | 0.8 s | 4 | 1300 Hz |
+| Continuous slouch | Cooldown | Alert |
+|-------------------|----------|-------|
+| 0 – 2 s | 2.5 s | Gentle chime (soft two-note) |
+| 2 – 4 s | 2.0 s | Nudge (three rising notes) |
+| 4 – 7 s | 1.5 s | Warning (double two-tone burst) |
+| 7 – 10 s | 1.0 s | Urgent (fast descending triplets) |
+| 10 s+ | 0.8 s | Alarm (rapid siren sweep) |
 
 ---
 
@@ -98,20 +98,7 @@ On exit, a summary is printed to the terminal:
 
 ## Demo
 
-### Video Demonstration
-
-<!-- Replace with actual demo video -->
-_Demo video coming soon._
-
-### Terminal Output
-
-<!-- Replace with terminal screenshot -->
-_Terminal screenshot coming soon._
-
-### Live Window
-
-<!-- Replace with window screenshot -->
-_Window screenshot coming soon._
+A screen recording of Spine Watch running live is available in the repository.
 
 ---
 
