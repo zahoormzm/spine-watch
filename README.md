@@ -6,7 +6,9 @@ Stop slouching at your desk. Spine Watch turns your Raspberry Pi 5 into a strict
 
 ## Demo
 
-A screen recording of Spine Watch running live can be viewed on [YouTube](https://youtu.be/LNT1qJHfEqE).
+Click the image below to watch a screen recording of Spine Watch running live:
+
+[![Spine Watch Demo](https://img.youtube.com/vi/LNT1qJHfEqE/0.jpg)](https://youtu.be/LNT1qJHfEqE)
 
 ---
 
